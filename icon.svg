@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="CLOCKIT icon">
+  <rect width="512" height="512" rx="120" fill="#080909"/>
+  <circle cx="256" cy="256" r="156" fill="none" stroke="#62f58d" stroke-width="34"/>
+  <path d="M256 160v104l72 42" fill="none" stroke="#f7f8f8" stroke-width="34" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="256" r="17" fill="#f7f8f8"/>
+</svg>
