@@ -9,13 +9,18 @@ const defaultState = {
   sheet: null,
 };
 
+let storageError = "";
+let storageReadBlocked = false;
+let sheetTrigger = null;
 let state = loadState();
 let tickHandle = null;
 
 function loadState() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (!saved) return { ...defaultState };
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw === null) return { ...defaultState };
+    const saved = JSON.parse(raw);
+    if (!validStoredState(saved)) throw new Error("Invalid saved data");
     return {
       ...defaultState,
       ...saved,
@@ -25,13 +30,57 @@ function loadState() {
       sessions: Array.isArray(saved.sessions) ? saved.sessions : [],
     };
   } catch {
+    storageReadBlocked = true;
+    storageError = "Your saved data could not be opened. Reload to try again. CLOCKIT will not overwrite it.";
     return { ...defaultState };
   }
 }
 
-function persist() {
-  const persisted = { ...state, page: "now", sheet: null };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
+function validStoredState(saved) {
+  const id = (value) => typeof value === "string" && /^[a-zA-Z0-9_-]+$/.test(value);
+  const time = (value) => Number.isFinite(value) && value >= 0 && value <= 8640000000000000;
+  if (!saved || !Array.isArray(saved.projects) || !Array.isArray(saved.sessions)) return false;
+  if (!saved.projects.every((project) => project && id(project.id) && typeof project.name === "string"
+    && typeof project.category === "string" && time(project.createdAt)
+    && (project.budgetHours === null || (Number.isFinite(project.budgetHours) && project.budgetHours > 0)))) return false;
+  if (!saved.sessions.every((session) => session && id(session.id) && id(session.projectId)
+    && time(session.startedAt) && time(session.endedAt) && session.endedAt >= session.startedAt
+    && Number.isFinite(session.durationSeconds) && session.durationSeconds >= 0
+    && Number.isFinite(session.earnings) && session.earnings >= 0 && typeof session.note === "string")) return false;
+  if (saved.active && (!time(saved.active.startedAt) || !saved.projects.some((project) => project.id === saved.active.projectId))) return false;
+  return new Set(saved.projects.map((project) => project.id)).size === saved.projects.length
+    && new Set(saved.sessions.map((session) => session.id)).size === saved.sessions.length;
+}
+
+function persist(nextState) {
+  if (storageReadBlocked) {
+    showStorageError();
+    return false;
+  }
+  try {
+    const persisted = { ...nextState, page: "now", sheet: null };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
+    state = nextState;
+    storageError = "";
+    document.getElementById("storage-error")?.remove();
+    return true;
+  } catch {
+    storageError = "Could not save this change. Your previous data is unchanged. Check that browser storage is available, then try again.";
+    showStorageError();
+    return false;
+  }
+}
+
+function showStorageError() {
+  let alert = document.getElementById("storage-error");
+  if (!alert) {
+    alert = document.createElement("p");
+    alert.id = "storage-error";
+    alert.className = "storage-error";
+    alert.setAttribute("role", "alert");
+    document.body.appendChild(alert);
+  }
+  alert.textContent = storageError;
 }
 
 function uid(prefix) {
@@ -134,6 +183,15 @@ function render() {
 
   if (state.sheet) app.insertAdjacentHTML("beforeend", sheetView());
   bindEvents();
+  if (storageError) showStorageError();
+  document.body.classList.toggle("sheet-open", Boolean(state.sheet));
+  app.querySelectorAll(":scope > :not(.sheet-backdrop)").forEach((element) => {
+    element.inert = Boolean(state.sheet);
+  });
+  if (state.sheet) {
+    const dialog = document.querySelector(".sheet");
+    (dialog.querySelector("[autofocus]") || dialog.querySelector("input, select, textarea") || dialog).focus();
+  }
 
   if (state.active && state.page === "now") {
     tickHandle = setInterval(updateLiveTimer, 1000);
@@ -204,6 +262,7 @@ function historyView() {
               <div class="row-value">${secondsToHuman(session.durationSeconds, true)}</div>
             </div>
             <div class="row-meta">${label}${session.earnings ? ` · ${money(session.earnings)}` : ""}${session.note ? ` · ${escapeHtml(session.note)}` : ""}</div>
+            <button class="link-button session-edit" data-edit-session="${session.id}" aria-label="Edit session for ${escapeHtml(project?.name || "Work")} on ${label}">Edit session</button>
           </article>
         `;
       }).join("")
@@ -275,15 +334,17 @@ function sheetView() {
   if (state.sheet.type === "choose") return chooseProjectSheet();
   if (state.sheet.type === "new-project") return newProjectSheet();
   if (state.sheet.type === "details") return detailsSheet(state.sheet.sessionId);
+  if (state.sheet.type === "edit-session") return editSessionSheet(state.sheet.sessionId);
   return "";
 }
 
 function sheetFrame(content) {
   return `
     <div class="sheet-backdrop" data-action="close-sheet">
-      <section class="sheet" role="dialog" aria-modal="true" onclick="event.stopPropagation()">
+      <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-heading" tabindex="-1" onclick="event.stopPropagation()">
         <div class="handle"></div>
-        ${content}
+        <button class="icon-button sheet-close" data-action="close-sheet" aria-label="Close dialog">×</button>
+        ${content.replace('class="sheet-title"', 'class="sheet-title" id="sheet-heading"')}
       </section>
     </div>
   `;
@@ -298,7 +359,7 @@ function chooseProjectSheet() {
 
   const rows = projects.length
     ? projects.map((project) => `
-        <button class="project-row" data-start-project="${project.id}">
+        <button class="project-row" data-start-project="${project.id}" ${state.active ? "disabled" : ""}>
           <span><strong>${escapeHtml(project.name)}</strong><small>${escapeHtml(remainingText(project))}</small></span>
           <span class="chevron">›</span>
         </button>
@@ -307,7 +368,7 @@ function chooseProjectSheet() {
 
   return sheetFrame(`
     <h2 class="sheet-title">Choose your work</h2>
-    <p class="sheet-subtitle">Pick it and the timer starts immediately.</p>
+    <p class="sheet-subtitle">${state.active ? "A timer is running. Stop it before starting another project." : "Pick it and the timer starts immediately."}</p>
     ${rows}
     <button class="new-project-button" data-action="new-project">+ New project</button>
   `);
@@ -337,7 +398,7 @@ function newProjectSheet() {
       </div>
       <div class="form-actions">
         <button type="button" class="secondary-button" data-action="close-sheet">Cancel</button>
-        <button class="primary-button compact-primary" type="submit">Create + start</button>
+        <button class="primary-button compact-primary" type="submit">${state.active ? "Create project" : "Create + start"}</button>
       </div>
     </form>
   `);
@@ -368,7 +429,99 @@ function detailsSheet(sessionId) {
   `);
 }
 
+function localDateTime(timestamp) {
+  const date = new Date(timestamp);
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function editSessionSheet(sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return "";
+  return sheetFrame(`
+    <h2 class="sheet-title">Edit session</h2>
+    <p class="sheet-subtitle">Forgot to stop? Correct the time here. Your totals will update automatically.</p>
+    <form class="form" id="session-form" data-session-id="${session.id}">
+      <div class="field">
+        <label for="session-project">Project</label>
+        <select id="session-project" name="projectId" required>
+          ${state.projects.map((project) => `<option value="${escapeHtml(project.id)}" ${project.id === session.projectId ? "selected" : ""}>${escapeHtml(project.name)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field">
+        <label for="session-start">Started</label>
+        <input id="session-start" name="startedAt" type="datetime-local" step="60" value="${localDateTime(session.startedAt).slice(0, 16)}" required />
+      </div>
+      <div class="field">
+        <label for="session-end">Ended</label>
+        <input id="session-end" name="endedAt" type="datetime-local" step="60" value="${localDateTime(session.endedAt).slice(0, 16)}" required />
+      </div>
+      <div class="field">
+        <label for="earnings">Money earned or attributed (optional)</label>
+        <input id="earnings" name="earnings" type="number" min="0" step="0.01" inputmode="decimal" value="${session.earnings || ""}" placeholder="$0" />
+      </div>
+      <div class="field">
+        <label for="note">Quick note (optional)</label>
+        <textarea id="note" name="note" maxlength="180">${escapeHtml(session.note || "")}</textarea>
+      </div>
+      <p class="form-error" id="session-error" role="alert" hidden></p>
+      <div class="form-actions">
+        <button type="button" class="secondary-button" data-action="close-sheet">Cancel</button>
+        <button class="primary-button compact-primary" type="submit">Save changes</button>
+      </div>
+    </form>
+  `);
+}
+
+function saveEditedSession(event) {
+  event.preventDefault();
+  const sessionId = event.currentTarget.dataset.sessionId;
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session) return;
+  const form = new FormData(event.currentTarget);
+  // Keep the exact original timestamp when a date field was not changed,
+  // including milliseconds and ambiguous local times around daylight saving.
+  const readTime = (key) => {
+    const raw = String(form.get(key));
+    if (raw === localDateTime(session[key]).slice(0, 16)) return session[key];
+    const value = raw.length === 16 ? `${raw}:00` : raw;
+    if (value === localDateTime(session[key])) return session[key];
+    const timestamp = new Date(value).getTime();
+    return Number.isFinite(timestamp) && localDateTime(timestamp) === value ? timestamp : NaN;
+  };
+  const startedAt = readTime("startedAt");
+  const endedAt = readTime("endedAt");
+  const earnings = Number(form.get("earnings"));
+  const projectId = String(form.get("projectId"));
+  let error = "";
+  if (!getProject(projectId)) error = "Choose a project for this session.";
+  else if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt)) error = "Enter valid start and end times.";
+  else if (endedAt <= startedAt) error = "End time must be after start time.";
+  else if (endedAt > Date.now()) error = "End time cannot be in the future.";
+  else if (!Number.isFinite(earnings) || earnings < 0) error = "Enter earnings of zero or more.";
+  if (error) {
+    const message = document.getElementById("session-error");
+    message.textContent = error;
+    message.hidden = false;
+    return;
+  }
+  const updated = {
+    ...session, projectId, startedAt, endedAt,
+    durationSeconds: Math.max(1, Math.floor((endedAt - startedAt) / 1000)),
+    earnings,
+    note: String(form.get("note") || "").trim(),
+    updatedAt: Date.now(),
+  };
+  if (!persist({ ...state, sessions: state.sessions.map((item) => item.id === sessionId ? updated : item), sheet: null })) return;
+  render();
+  document.querySelector(`[data-edit-session="${sessionId}"]`)?.focus();
+  toast("Session updated");
+}
+
 function bindEvents() {
+  document.querySelectorAll("[data-edit-session]").forEach((button) => {
+    button.addEventListener("click", () => openSheet("edit-session", { sessionId: button.dataset.editSession }));
+  });
   document.querySelectorAll("[data-page]").forEach((button) => {
     button.addEventListener("click", () => {
       state.page = button.dataset.page;
@@ -400,9 +553,17 @@ function bindEvents() {
 
   const detailsForm = document.getElementById("details-form");
   if (detailsForm) detailsForm.addEventListener("submit", saveSessionDetails);
+  const sessionForm = document.getElementById("session-form");
+  if (sessionForm) sessionForm.addEventListener("submit", saveEditedSession);
 }
 
 function openSheet(type, extra = {}) {
+  if (!state.sheet) {
+    const trigger = document.activeElement;
+    sheetTrigger = trigger?.dataset.editSession
+      ? `[data-edit-session="${trigger.dataset.editSession}"]`
+      : trigger?.dataset.action ? `[data-action="${trigger.dataset.action}"]` : null;
+  }
   state.sheet = { type, ...extra };
   render();
 }
@@ -410,6 +571,8 @@ function openSheet(type, extra = {}) {
 function closeSheet() {
   state.sheet = null;
   render();
+  if (sheetTrigger) document.querySelector(sheetTrigger)?.focus();
+  sheetTrigger = null;
 }
 
 function createProjectAndStart(event) {
@@ -426,9 +589,15 @@ function createProjectAndStart(event) {
     category: String(form.get("category") || "Business"),
     createdAt: Date.now(),
   };
-  state.projects.unshift(project);
-  persist();
-  startProject(project.id);
+  if (!Number.isFinite(budgetRaw) || budgetRaw < 0) return;
+  const nextState = { ...state, projects: [project, ...state.projects], sheet: null };
+  if (!state.active) {
+    nextState.active = { projectId: project.id, startedAt: Date.now() };
+    nextState.lastProjectId = project.id;
+    nextState.page = "now";
+  }
+  if (!persist(nextState)) return;
+  render();
 }
 
 function startProject(projectId) {
@@ -436,14 +605,13 @@ function startProject(projectId) {
   const project = getProject(projectId);
   if (!project) return;
 
-  state.active = {
-    projectId,
-    startedAt: Date.now(),
-  };
-  state.lastProjectId = projectId;
-  state.page = "now";
-  state.sheet = null;
-  persist();
+  if (!persist({
+    ...state,
+    active: { projectId, startedAt: Date.now() },
+    lastProjectId: projectId,
+    page: "now",
+    sheet: null,
+  })) return;
   render();
 }
 
@@ -462,11 +630,13 @@ function stopActiveSession() {
     createdAt: endedAt,
   };
 
-  state.sessions.push(session);
-  state.lastProjectId = state.active.projectId;
-  state.active = null;
-  state.sheet = { type: "details", sessionId: session.id };
-  persist();
+  if (!persist({
+    ...state,
+    sessions: [...state.sessions, session],
+    lastProjectId: state.active.projectId,
+    active: null,
+    sheet: { type: "details", sessionId: session.id },
+  })) return;
   render();
   toast("Time saved");
 }
@@ -478,10 +648,10 @@ function saveSessionDetails(event) {
   if (!session) return;
 
   const form = new FormData(event.currentTarget);
-  session.earnings = Math.max(0, Number(form.get("earnings")) || 0);
-  session.note = String(form.get("note") || "").trim();
-  state.sheet = null;
-  persist();
+  const earnings = Number(form.get("earnings"));
+  if (!Number.isFinite(earnings) || earnings < 0) return;
+  const updated = { ...session, earnings, note: String(form.get("note") || "").trim() };
+  if (!persist({ ...state, sessions: state.sessions.map((item) => item.id === sessionId ? updated : item), sheet: null })) return;
   render();
   toast("Details saved");
 }
@@ -499,13 +669,17 @@ function toast(message) {
   if (old) old.remove();
   const element = document.createElement("div");
   element.className = "toast";
+  element.setAttribute("role", "status");
   element.textContent = message;
   document.body.appendChild(element);
   setTimeout(() => element.remove(), 1800);
 }
 
 function csvCell(value) {
-  return `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const text = String(value ?? "");
+  // Spreadsheet apps may execute formulas even when a CSV field is quoted.
+  const safe = /^\s*[=+@-]/.test(text) ? `'${text}` : text;
+  return `"${safe.replaceAll('"', '""')}"`;
 }
 
 function exportCsv() {
@@ -544,5 +718,26 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("./sw.js").catch(() => {});
   });
 }
+
+document.addEventListener("keydown", (event) => {
+  if (!state.sheet) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeSheet();
+  }
+  if (event.key === "Tab") {
+    const controls = [...document.querySelectorAll('.sheet button:not([disabled]), .sheet input, .sheet select, .sheet textarea')];
+    const first = controls[0];
+    const last = controls.at(-1);
+    const current = document.activeElement;
+    if (event.shiftKey && (current === first || !controls.includes(current))) {
+      event.preventDefault();
+      last?.focus();
+    } else if (!event.shiftKey && (current === last || !controls.includes(current))) {
+      event.preventDefault();
+      first?.focus();
+    }
+  }
+});
 
 render();
