@@ -12,11 +12,24 @@ The product rule is simple: **start fast, stop fast, reflect later.**
 - Timer persistence through refreshes and app closes
 - Optional earnings and notes after a work session
 - Session history
+- Edit a past session's project, start/end times, earnings, and notes
 - Weekly time, earnings, and effective hourly value
 - Per-project effective hourly value
 - CSV export for bookkeeping and tax organization
 - Offline-capable progressive web app
 - Local-first storage, so no account is required for the prototype
+- Save-failure warnings that preserve the previous saved state
+
+## Current development workspace
+
+Continue the existing MVP in this repository. CLOCKIT remains a static, mobile-first app with no runtime dependencies or build step. Development conventions are in [AGENTS.md](AGENTS.md).
+
+The current iteration makes the MVP easier to validate in daily use:
+
+- **History → Edit session** corrects a forgotten stop or adds details later. Project budgets, earnings, and exports use the corrected session immediately.
+- Adding a project while a timer is running creates the project without interrupting the timer. Stop the current session before starting another.
+- A failed save leaves the previous state intact. If stopping fails, the timer continues and can be stopped again once storage is available. Unreadable saved data is never silently replaced.
+- Dialogs support keyboard focus, Escape, and explicit close buttons. Offline caching is limited to this app's scope.
 
 ## Use it locally
 
@@ -33,6 +46,19 @@ python3 -m http.server 8080
 ```
 
 Then visit `http://localhost:8080`.
+
+## Development checks
+
+Node.js 20+ is used only for tests. The app itself still runs without Node or npm.
+
+```bash
+npm ci
+npx playwright install chromium
+npm run check
+npm test
+```
+
+The browser suite starts its own local server and uses isolated browser data. It checks timer persistence, session corrections and totals, save failures, keyboard navigation, mobile width, CSV output, and offline loading. On Linux CI, use `npx playwright install --with-deps chromium` if browser system libraries are missing.
 
 ## Publish with GitHub Pages
 
@@ -65,6 +91,6 @@ Important questions:
 
 ## Data
 
-The current prototype stores data in browser `localStorage`. Clearing site data will clear CLOCKIT data, so use the CSV export for backups during testing.
+The current prototype stores data in browser `localStorage`. Clearing site data will clear CLOCKIT data. CSV export provides a readable record for testing and bookkeeping; it is not a restorable app backup. Use one browser tab and one device during MVP validation: cross-tab coordination and cloud sync are not implemented.
 
-A future production version should add authenticated cloud sync, encrypted storage, reliable backups, editable sessions, and a proper data export/import flow.
+A future production version should add authenticated cloud sync, encrypted storage, reliable backups, and a proper data export/import flow. Mobile home-screen installation still needs testing on actual devices, especially iOS.

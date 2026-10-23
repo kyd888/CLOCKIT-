@@ -26,6 +26,29 @@ body {
 }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
+button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+button:disabled { opacity: .5; cursor: default; }
+.sheet-open { overflow: hidden; }
+.row-title, .row-meta, .active-project, .project-row strong { overflow-wrap: anywhere; }
+.session-edit { min-height: 44px; padding-bottom: 0; }
+.form-error { color: var(--danger); margin-bottom: 0; }
+.storage-error {
+  position: fixed;
+  z-index: 100;
+  top: env(safe-area-inset-top, 0px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(calc(100% - 24px), 520px);
+  padding: 16px;
+  background: #3c2024;
+  color: var(--text);
+  border: 1px solid var(--danger);
+  border-radius: 16px;
+  font-size: 14px;
+}
 
 .app-shell {
   width: min(100%, 560px);
@@ -204,6 +227,7 @@ h3 { font-size: 16px; }
   padding-top: 48px;
 }
 .sheet {
+  position: relative;
   width: min(100%, 560px);
   max-height: 88vh;
   overflow: auto;
@@ -213,6 +237,8 @@ h3 { font-size: 16px; }
   padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
   box-shadow: 0 -24px 80px rgba(0,0,0,.4);
 }
+.sheet-close { position: absolute; right: 12px; top: 8px; }
+.sheet-title { padding-right: 36px; }
 .handle { width: 42px; height: 5px; border-radius: 999px; background: #3a3e3e; margin: 2px auto 22px; }
 .sheet-title { font-size: 28px; margin-bottom: 6px; letter-spacing: -1.1px; }
 .sheet-subtitle { color: var(--muted); margin-bottom: 22px; }
@@ -247,9 +273,11 @@ h3 { font-size: 16px; }
   cursor: pointer;
 }
 
-.form { display: grid; gap: 14px; }
+.form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.field { min-width: 0; }
 .field label { display: block; color: var(--muted); font-size: 13px; margin: 0 0 7px 4px; }
 .field input, .field textarea, .field select {
+  min-width: 0;
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 17px;
